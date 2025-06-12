@@ -1,9 +1,10 @@
 import torch
-from efficient_conformer import Conformer
 from wenet.transformer.embedding import RopePositionalEncoding
 from wenet.transformer.subsampling import Conv1dSubsampling2
 from wenet.utils.class_utils import WENET_ACTIVATION_CLASSES
 from wenet.utils.mask import make_non_pad_mask
+
+from conformer import ConformerDecoder, ConformerEncoder
 
 
 def precompute_freqs_cis(dim: int,
@@ -34,6 +35,7 @@ class Encoder(torch.nn.Module):
         super().__init__()
         # TODO: futuer funnel pooling
 
+        self.config = configs
         self.conv = torch.nn.Sequential(
             torch.nn.LayerNorm(configs.input_dim,
                                elementwise_affine=False,
@@ -48,7 +50,7 @@ class Encoder(torch.nn.Module):
             torch.nn.Linear(configs.output_size,
                             configs.input_dim * 2,
                             bias=False))
-        self.encoder = Conformer(configs.encoder)
+        self.encoder = ConformerEncoder(configs.encoder)
 
         self.proj_1 = torch.nn.Linear(configs.output_size,
                                       configs.latent_dim,
@@ -57,7 +59,7 @@ class Encoder(torch.nn.Module):
         self.proj_2 = torch.nn.Linear(configs.latent_dim,
                                       configs.output_size,
                                       bias=False)
-        self.decoder = Conformer(configs.decoder)
+        self.decoder = ConformerDecoder(configs.decoder)
 
         self.proj_out = torch.nn.Sequential(
             torch.nn.Linear(configs.output_size,
@@ -101,8 +103,20 @@ class Encoder(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, x_lens: torch.Tensor):
         """forward for training"""
+
+        frame_num = torch.ceil(x.shape[-1] / self.config.input_dim)
+        pad_len = frame_num * self.config.input_dim - x.shape[-1]
+        x = torch.nn.functional.pad(x, (0, pad_len), "constant",
+                                    0.0).reshape(x.shape[0], -1,
+                                                 self.config.input_dim)
+        x_lens = x_lens + pad_len
+
         hidden, mask = self._encode(x, x_lens)
         # TODO: ae
         hidden = self.proj_2(hidden)
         x, x_mask = self._decode(hidden, mask)
+
+        x = x.flatten(-1)
+        x_mask = x_mask.unsqueeze(-1).repeat(1, 1,
+                                             self.config.input_dim).flatten(-1)
         return x, x_mask.float().sum(-1)
