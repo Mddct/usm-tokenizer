@@ -117,3 +117,14 @@
       url={https://arxiv.org/abs/2412.10117}, 
 }
 ```
+```
+@misc{zeng2024glm4voiceintelligenthumanlikeendtoend,
+      title={GLM-4-Voice: Towards Intelligent and Human-Like End-to-End Spoken Chatbot}, 
+      author={Aohan Zeng and Zhengxiao Du and Mingdao Liu and Kedong Wang and Shengmin Jiang and Lei Zhao and Yuxiao Dong and Jie Tang},
+      year={2024},
+      eprint={2412.02612},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2412.02612}, 
+}
+```
