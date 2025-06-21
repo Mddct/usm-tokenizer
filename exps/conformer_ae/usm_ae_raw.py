@@ -7,7 +7,6 @@
 # TODO: 100hz -> 50hz -> 25hz
 
 import math
-from re import match
 from typing import Any, Tuple
 
 import torch
@@ -19,7 +18,7 @@ Configs = Any
 
 def reparameterize(mean, logvar):
     std = torch.exp(0.5 * logvar)
-    eps = torch.randn(logvar.shape)
+    eps = torch.randn(logvar.shape, device=mean.device)
     return mean + eps * std
 
 
@@ -112,7 +111,7 @@ class SimpleDIT(torch.nn.Module):
                                             self.configs.latent_dim)  # [B, D]
         temb = self.time_embed(timesteps)
 
-        hidden_states = temb + latent
+        hidden_states = temb.unsqueeze(1) + latent
         v_pred, mask = self.decoder(hidden_states, latent_mask)
         return v_pred, mask.squeeze(1)
 

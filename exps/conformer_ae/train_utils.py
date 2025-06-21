@@ -1,6 +1,5 @@
-import math
 import os
-from typing import Any
+from typing import Any, List
 
 import torch
 import torch.distributed as dist
@@ -92,7 +91,8 @@ class TrainState:
         model.cuda()
         self.config = config
         # TODO: FSDP or deepspeed for future usm ae or dit (flow) decoder
-        self.model = torch.nn.parallel.DistributedDataParallel(model)
+        self.model = torch.nn.parallel.DistributedDataParallel(
+            model, find_unused_parameters=True)
         self.device = config.device
 
         self.max_steps = config.max_train_steps
