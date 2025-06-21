@@ -7,7 +7,6 @@
 # TODO: 100hz -> 50hz -> 25hz
 
 import math
-from re import match
 from typing import Any, Tuple
 
 import torch
@@ -19,7 +18,7 @@ Configs = Any
 
 def reparameterize(mean, logvar):
     std = torch.exp(0.5 * logvar)
-    eps = torch.randn(logvar.shape)
+    eps = torch.randn(logvar.shape, device=mean.device)
     return mean + eps * std
 
 
@@ -55,9 +54,14 @@ class SimpleDIT(torch.nn.Module):
         self.configs = configs
 
         self.decoder = Conformer(configs)
+        self.t_embedding = TimestepEmbedding(configs.timesteps_dim,
+                                             configs.in_dims)
+        self.condition_embedding = TimestepEmbedding(configs.latent_dim,
+                                                     configs.in_dims)
 
-        self.time_embed = TimestepEmbedding(configs.latent_dim,
-                                            configs.output_size)
+        self.proj = torch.nn.Linear(configs.in_dims,
+                                    configs.output_size,
+                                    bias=False)
 
     def timestep_embedding(self,
                            t: torch.Tensor,
@@ -102,18 +106,20 @@ class SimpleDIT(torch.nn.Module):
 
     def forward(
         self,
-        latent: torch.Tensor,
-        latent_mask: torch.Tensor,
+        xs: torch.Tensor,
+        xs_mask: torch.Tensor,
+        condition: torch.Tensor,
         timesteps: torch.Tensor,
     ):
         """forward for training
         """
-        timesteps = self.timestep_embedding(timesteps,
-                                            self.config.output_size)  # [B, D]
-        temb = self.time_embed(timesteps)
-
-        hidden_states = temb + latent
-        v_pred, mask = self.decoder(hidden_states, latent_mask)
+        timesteps = self.timestep_embedding(
+            timesteps, self.configs.timesteps_dim)  # [B, D]
+        t_emb = self.t_embedding(timesteps)
+        c_emb = self.condition_embedding(condition)
+        hidden_states = t_emb.unsqueeze(1) + xs + c_emb
+        hidden_states = self.proj(hidden_states)
+        v_pred, mask = self.decoder(hidden_states, xs_mask)
         return v_pred, mask.squeeze(1)
 
 
@@ -121,44 +127,40 @@ class AudioAutoEncoder(torch.nn.Module):
 
     def __init__(self, configs: Configs) -> None:
         super().__init__()
+        assert configs.final_norm is False
+
         self.configs = configs
 
         self.encoder = Conformer(configs)
 
         self.decoder = SimpleDIT(configs)
-        self.down = torch.nn.Sequential(
-            torch.nn.Linear(configs.output_size, 768, bias=False),
-            torch.nn.Linear(768, configs.latent_dim * 2, bias=False),
-        )
-        self.up = torch.nn.Sequential(
-            torch.nn.Linear(configs.latent_dim, 768, bias=False),
+        self.enc_proj_in = torch.nn.Sequential(
+            torch.nn.Linear(configs.in_dims, 768, bias=False),
             torch.nn.Linear(768, configs.output_size, bias=False),
         )
+        self.z_proj = torch.nn.Sequential(
+            torch.nn.Linear(configs.output_size, 768, bias=False),
+            torch.nn.Linear(768, configs.latent_dim * 2, bias=False))
 
-        self.proj_in = torch.nn.Sequential(
-            torch.nn.Linear(configs.in_dims, configs.output_size, bias=False),
-            torch.nn.Linear(768, configs.latent_dim * 2, bias=False),
-        )
-
-        self.proj_out = torch.nn.Linear(configs.output_size, configs.in_dims)
-        assert self.configs.final_norm is False
+        self.dec_proj_out = torch.nn.Linear(configs.output_size,
+                                            configs.in_dims)
 
     def _encode(self, audio: torch.Tensor,
                 audio_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # NOTE: audio is padded
         assert audio.shape[-1] in [320, 480, 960]
 
-        xs = self.proj_in(audio)  # [B,T,D]
+        xs = self.enc_proj_in(audio)  # [B,T,D]
         xs_mask = make_non_pad_mask(audio_lens)
 
         encoder_out, _ = self.encoder(xs, xs_mask)
-        out = self.down(encoder_out)
-        return out, xs_mask.squeeze(1)
+        z = self.z_proj(encoder_out)
+        return z, xs_mask.squeeze(1)
 
-    def _decode(self, z: torch.Tensor, z_mask: torch.Tensor, t: torch.Tensor):
-        xs = self.up(z)
-        xs, _ = self.decoder(xs, z_mask, t)
-
+    def _decode(self, z: torch.Tensor, z_mask: torch.Tensor,
+                condition: torch.Tensor, t: torch.Tensor):
+        xs, _ = self.decoder(z, z_mask, condition, t)
+        xs = self.dec_proj_out(xs)
         return xs, z_mask
 
     def forward(self, audio: torch.Tensor, audio_lens: torch.Tensor,
@@ -166,22 +168,23 @@ class AudioAutoEncoder(torch.nn.Module):
         """ forward for training
         """
         xs, xs_mask = self._encode(audio, audio_lens)
-        mean, log_var = xs.split(2, dim=-1)
+        mean, log_var = xs.chunk(2, dim=-1)
         z = reparameterize(mean, log_var)
+        condition = z
 
-        noise = torch.randn(z.shape, dtype=z.dtype, device=z.device)
-        noise_z = add_noise(z, noise, t)
-        xs, _ = self._decode(noise_z, xs_mask.squeeze(1), t)
+        noise = torch.randn(audio.shape,
+                            dtype=audio.dtype,
+                            device=audio.device)
+        noise_audio = add_noise(audio, noise, t)
+        recog, _ = self._decode(noise_audio, xs_mask.squeeze(1), condition, t)
 
-        recog = self.proj_out(xs)
+        target = noise - audio
+        loss_flow = (target - recog)**2 * xs_mask.unsqueeze(-1)
+        loss_kl = kl_divergence(mean, log_var) * xs_mask.unsqueeze(-1)
 
-        target = noise - z
-        loss_flow = (target * xs_mask - recog * xs_mask)**2
-
-        loss_kl = kl_divergence(mean, log_var) * xs_mask
-
-        loss = loss_flow.sum() + self.configs.kl_loss_weight * loss_kl.sum()
-
+        loss_flow = loss_flow.sum() / xs_mask.sum() / self.configs.latent_dim
+        loss_kl = loss_kl.sum() / xs_mask.sum() / self.configs.latent_dim
+        loss = self.configs.loss_kl_weight * loss_kl.sum() + loss_flow
         return {
             "loss": loss,
             "loss_kl": loss_kl.sum().detach(),
@@ -191,3 +194,25 @@ class AudioAutoEncoder(torch.nn.Module):
 
 def kl_divergence(mean, logvar):
     return -0.5 * (1 + logvar - torch.square(mean) - torch.exp(logvar))
+
+
+if __name__ == '__main__':
+    from exps.conformer_ae.configs.default import get_config
+    from exps.conformer_ae.usm_ae_raw import AudioAutoEncoder
+
+    configs = get_config()
+    model = AudioAutoEncoder(configs)
+
+    wav = torch.randn(1, 50, configs.in_dims)
+    wav_lens = torch.tensor([50], dtype=torch.long)
+    timesteps = torch.linspace(1, 0, steps=configs.flow_infer_steps + 1)
+
+    ts = torch.randint(
+        low=0,
+        high=len(timesteps) - 1,
+        size=(wav.shape[0], ),
+    )
+    t = timesteps[ts]
+
+    output = model(wav, wav_lens, t)
+    print(output)
