@@ -103,9 +103,10 @@ def get_config():
     config.conv_inner_factor = 2
     config.macaron_style = True
 
-    config.latent_dim = 320
+    config.latent_dim = 16
     config.in_dims = 320  # 50hz, 16K: 320; 24k 480, 48k 960
     config.flow_infer_steps = 50
     config.loss_kl_weight = 0.000001
+    config.timesteps_dim = 32
 
     return config

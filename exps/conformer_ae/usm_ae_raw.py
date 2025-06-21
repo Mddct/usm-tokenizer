@@ -54,9 +54,14 @@ class SimpleDIT(torch.nn.Module):
         self.configs = configs
 
         self.decoder = Conformer(configs)
+        self.t_embedding = TimestepEmbedding(configs.timesteps_dim,
+                                             configs.in_dims)
+        self.condition_embedding = TimestepEmbedding(configs.latent_dim,
+                                                     configs.in_dims)
 
-        self.time_embed = TimestepEmbedding(configs.latent_dim,
-                                            configs.output_size)
+        self.proj = torch.nn.Linear(configs.in_dims,
+                                    configs.output_size,
+                                    bias=False)
 
     def timestep_embedding(self,
                            t: torch.Tensor,
@@ -101,18 +106,20 @@ class SimpleDIT(torch.nn.Module):
 
     def forward(
         self,
-        latent: torch.Tensor,
-        latent_mask: torch.Tensor,
+        xs: torch.Tensor,
+        xs_mask: torch.Tensor,
+        condition: torch.Tensor,
         timesteps: torch.Tensor,
     ):
         """forward for training
         """
-        timesteps = self.timestep_embedding(timesteps,
-                                            self.configs.latent_dim)  # [B, D]
-        temb = self.time_embed(timesteps)
-
-        hidden_states = temb.unsqueeze(1) + latent
-        v_pred, mask = self.decoder(hidden_states, latent_mask)
+        timesteps = self.timestep_embedding(
+            timesteps, self.configs.timesteps_dim)  # [B, D]
+        t_emb = self.t_embedding(timesteps)
+        c_emb = self.condition_embedding(condition)
+        hidden_states = t_emb.unsqueeze(1) + xs + c_emb
+        hidden_states = self.proj(hidden_states)
+        v_pred, mask = self.decoder(hidden_states, xs_mask)
         return v_pred, mask.squeeze(1)
 
 
@@ -120,44 +127,40 @@ class AudioAutoEncoder(torch.nn.Module):
 
     def __init__(self, configs: Configs) -> None:
         super().__init__()
+        assert configs.final_norm is False
+
         self.configs = configs
 
         self.encoder = Conformer(configs)
 
         self.decoder = SimpleDIT(configs)
-        self.down = torch.nn.Sequential(
-            torch.nn.Linear(configs.output_size, 768, bias=False),
-            torch.nn.Linear(768, configs.latent_dim * 2, bias=False),
-        )
-        self.up = torch.nn.Sequential(
-            torch.nn.Linear(configs.latent_dim, 768, bias=False),
-            torch.nn.Linear(768, configs.output_size, bias=False),
-        )
-
-        self.proj_in = torch.nn.Sequential(
+        self.enc_proj_in = torch.nn.Sequential(
             torch.nn.Linear(configs.in_dims, 768, bias=False),
             torch.nn.Linear(768, configs.output_size, bias=False),
         )
+        self.z_proj = torch.nn.Sequential(
+            torch.nn.Linear(configs.output_size, 768, bias=False),
+            torch.nn.Linear(768, configs.latent_dim * 2, bias=False))
 
-        self.proj_out = torch.nn.Linear(configs.output_size, configs.in_dims)
-        assert self.configs.final_norm is False
+        self.dec_proj_out = torch.nn.Linear(configs.output_size,
+                                            configs.in_dims)
 
     def _encode(self, audio: torch.Tensor,
                 audio_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # NOTE: audio is padded
         assert audio.shape[-1] in [320, 480, 960]
 
-        xs = self.proj_in(audio)  # [B,T,D]
+        xs = self.enc_proj_in(audio)  # [B,T,D]
         xs_mask = make_non_pad_mask(audio_lens)
 
         encoder_out, _ = self.encoder(xs, xs_mask)
-        out = self.down(encoder_out)
-        return out, xs_mask.squeeze(1)
+        z = self.z_proj(encoder_out)
+        return z, xs_mask.squeeze(1)
 
-    def _decode(self, z: torch.Tensor, z_mask: torch.Tensor, t: torch.Tensor):
-        xs = self.up(z)
-        xs, _ = self.decoder(xs, z_mask, t)
-
+    def _decode(self, z: torch.Tensor, z_mask: torch.Tensor,
+                condition: torch.Tensor, t: torch.Tensor):
+        xs, _ = self.decoder(z, z_mask, condition, t)
+        xs = self.dec_proj_out(xs)
         return xs, z_mask
 
     def forward(self, audio: torch.Tensor, audio_lens: torch.Tensor,
@@ -167,14 +170,15 @@ class AudioAutoEncoder(torch.nn.Module):
         xs, xs_mask = self._encode(audio, audio_lens)
         mean, log_var = xs.chunk(2, dim=-1)
         z = reparameterize(mean, log_var)
+        condition = z
 
-        noise = torch.randn(z.shape, dtype=z.dtype, device=z.device)
-        noise_z = add_noise(z, noise, t)
-        xs, _ = self._decode(noise_z, xs_mask.squeeze(1), t)
+        noise = torch.randn(audio.shape,
+                            dtype=audio.dtype,
+                            device=audio.device)
+        noise_audio = add_noise(audio, noise, t)
+        recog, _ = self._decode(noise_audio, xs_mask.squeeze(1), condition, t)
 
-        recog = self.proj_out(xs)
-
-        target = noise - z
+        target = noise - audio
         loss_flow = (target - recog)**2 * xs_mask.unsqueeze(-1)
         loss_kl = kl_divergence(mean, log_var) * xs_mask.unsqueeze(-1)
 
