@@ -109,7 +109,7 @@ class SimpleDIT(torch.nn.Module):
         """forward for training
         """
         timesteps = self.timestep_embedding(timesteps,
-                                            self.config.output_size)  # [B, D]
+                                            self.configs.latent_dim)  # [B, D]
         temb = self.time_embed(timesteps)
 
         hidden_states = temb + latent
@@ -136,8 +136,8 @@ class AudioAutoEncoder(torch.nn.Module):
         )
 
         self.proj_in = torch.nn.Sequential(
-            torch.nn.Linear(configs.in_dims, configs.output_size, bias=False),
-            torch.nn.Linear(768, configs.latent_dim * 2, bias=False),
+            torch.nn.Linear(configs.in_dims, 768, bias=False),
+            torch.nn.Linear(768, configs.output_size, bias=False),
         )
 
         self.proj_out = torch.nn.Linear(configs.output_size, configs.in_dims)
@@ -166,7 +166,7 @@ class AudioAutoEncoder(torch.nn.Module):
         """ forward for training
         """
         xs, xs_mask = self._encode(audio, audio_lens)
-        mean, log_var = xs.split(2, dim=-1)
+        mean, log_var = xs.chunk(2, dim=-1)
         z = reparameterize(mean, log_var)
 
         noise = torch.randn(z.shape, dtype=z.dtype, device=z.device)
@@ -176,12 +176,12 @@ class AudioAutoEncoder(torch.nn.Module):
         recog = self.proj_out(xs)
 
         target = noise - z
-        loss_flow = (target * xs_mask - recog * xs_mask)**2
+        loss_flow = (target - recog)**2 * xs_mask.unsqueeze(-1)
+        loss_kl = kl_divergence(mean, log_var) * xs_mask.unsqueeze(-1)
 
-        loss_kl = kl_divergence(mean, log_var) * xs_mask
-
-        loss = loss_flow.sum() + self.configs.kl_loss_weight * loss_kl.sum()
-
+        loss_flow = loss_flow.sum() / xs_mask.sum() / self.configs.latent_dim
+        loss_kl = loss_kl.sum() / xs_mask.sum() / self.configs.latent_dim
+        loss = self.configs.loss_kl_weight * loss_kl.sum() + loss_flow
         return {
             "loss": loss,
             "loss_kl": loss_kl.sum().detach(),
@@ -191,3 +191,25 @@ class AudioAutoEncoder(torch.nn.Module):
 
 def kl_divergence(mean, logvar):
     return -0.5 * (1 + logvar - torch.square(mean) - torch.exp(logvar))
+
+
+if __name__ == '__main__':
+    from exps.conformer_ae.configs.default import get_config
+    from exps.conformer_ae.usm_ae_raw import AudioAutoEncoder
+
+    configs = get_config()
+    model = AudioAutoEncoder(configs)
+
+    wav = torch.randn(1, 50, configs.in_dims)
+    wav_lens = torch.tensor([50], dtype=torch.long)
+    timesteps = torch.linspace(1, 0, steps=configs.flow_infer_steps + 1)
+
+    ts = torch.randint(
+        low=0,
+        high=len(timesteps) - 1,
+        size=(wav.shape[0], ),
+    )
+    t = timesteps[ts]
+
+    output = model(wav, wav_lens, t)
+    print(output)
