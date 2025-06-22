@@ -182,7 +182,7 @@ class AudioAutoEncoder(torch.nn.Module):
         loss_flow = (target - recog)**2 * xs_mask.unsqueeze(-1)
         loss_kl = kl_divergence(mean, log_var) * xs_mask.unsqueeze(-1)
 
-        loss_flow = loss_flow.sum() / xs_mask.sum() / self.configs.latent_dim
+        loss_flow = loss_flow.sum() / xs_mask.sum() / self.configs.in_dims
         loss_kl = loss_kl.sum() / xs_mask.sum() / self.configs.latent_dim
         loss = self.configs.loss_kl_weight * loss_kl.sum() + loss_flow
         return {
