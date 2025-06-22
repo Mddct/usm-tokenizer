@@ -159,6 +159,7 @@ class TrainState:
                 self.writer.add_scalar('train/lr_{}'.format(i), lr, self.step)
             log_str += f' lr_{i} {lr:>6.5f}'
 
+        log_str += f" grad_norm {grad_norm:>6.3f}"
         if (self.step + 1) % self.config.log_interval == 0:
             logging.info(log_str)
 
