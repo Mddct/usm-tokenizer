@@ -4,6 +4,44 @@
 - [ ] sequence-vq  https://github.com/Mddct/sequence-vector-quantize/blob/main/quantize.py
 
 ```
+@misc{chen2025diffusionautoencodersscalableimage,
+      title={Diffusion Autoencoders are Scalable Image Tokenizers}, 
+      author={Yinbo Chen and Rohit Girdhar and Xiaolong Wang and Sai Saketh Rambhatla and Ishan Misra},
+      year={2025},
+      eprint={2501.18593},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2501.18593}, 
+}
+@misc{liu2025dgaediffusionguidedautoencoderefficient,
+      title={DGAE: Diffusion-Guided Autoencoder for Efficient Latent Representation Learning}, 
+      author={Dongxu Liu and Yuang Peng and Haomiao Tang and Yuwei Chen and Chunrui Han and Zheng Ge and Daxin Jiang and Mingxue Liao},
+      year={2025},
+      eprint={2506.09644},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2506.09644}, 
+}
+@misc{song2025magicodecsimplemaskedgaussianinjected,
+      title={MagiCodec: Simple Masked Gaussian-Injected Codec for High-Fidelity Reconstruction and Generation}, 
+      author={Yakun Song and Jiawei Chen and Xiaobin Zhuang and Chenpeng Du and Ziyang Ma and Jian Wu and Jian Cong and Dongya Jia and Zhuo Chen and Yuping Wang and Yuxuan Wang and Xie Chen},
+      year={2025},
+      eprint={2506.00385},
+      archivePrefix={arXiv},
+      primaryClass={cs.SD},
+      url={https://arxiv.org/abs/2506.00385}, 
+}
+
+@misc{zhu2025muqselfsupervisedmusicrepresentation,
+      title={MuQ: Self-Supervised Music Representation Learning with Mel Residual Vector Quantization}, 
+      author={Haina Zhu and Yizhi Zhou and Hangting Chen and Jianwei Yu and Ziyang Ma and Rongzhi Gu and Yi Luo and Wei Tan and Xie Chen},
+      year={2025},
+      eprint={2501.01108},
+      archivePrefix={arXiv},
+      primaryClass={cs.SD},
+      url={https://arxiv.org/abs/2501.01108}, 
+}
+
 @misc{rubenstein2023audiopalmlargelanguagemodel,
       title={AudioPaLM: A Large Language Model That Can Speak and Listen}, 
       author={Paul K. Rubenstein and Chulayuth Asawaroengchai and Duc Dung Nguyen and Ankur Bapna and Zalán Borsos and Félix de Chaumont Quitry and Peter Chen and Dalia El Badawy and Wei Han and Eugene Kharitonov and Hannah Muckenhirn and Dirk Padfield and James Qin and Danny Rozenberg and Tara Sainath and Johan Schalkwyk and Matt Sharifi and Michelle Tadmor Ramanovich and Marco Tagliasacchi and Alexandru Tudor and Mihajlo Velimirović and Damien Vincent and Jiahui Yu and Yongqiang Wang and Vicky Zayats and Neil Zeghidour and Yu Zhang and Zhishuai Zhang and Lukas Zilka and Christian Frank},
