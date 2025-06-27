@@ -124,7 +124,7 @@ class TrainState:
         log_str = f'[RANK {self.rank}] step_{self.step+1}: '
 
         loss_dict = self.model(wav, wav_lens,
-                               torch.randn(wav.shape[0], device=wav.device))
+                               torch.rand(wav.shape[0], device=wav.device))
         loss = loss_dict['loss']
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(),
