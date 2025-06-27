@@ -32,25 +32,25 @@ class Pipeline(object):
         g = torch.Generator(device=audio.device)
         g.manual_seed(2025)
         noise = torch.randn(audio.shape, generator=g, device=audio.device)
-        timesteps = torch.linspace(1,
-                                   0,
+        timesteps = torch.linspace(0,
+                                   1,
                                    self.configs.flow_infer_steps + 1,
                                    device=audio.device)
-        c_ts = timesteps[:-1]
-        p_ts = timesteps[1:]
+        c_ts = timesteps[1:]
+        p_ts = timesteps[:-1]
 
-        latents = noise
+        x = noise
         for step in range(self.configs.flow_infer_steps):
             t_curr = c_ts[step]
             t_prev = p_ts[step]
             t_vec = torch.full((noise.shape[0], ),
-                               t_curr,
+                               t_prev,
                                dtype=noise.dtype,
                                device=audio.device)
-            pred, _ = self.model._decode(latents, xs_mask, mean, t_vec)
-            latents = latents + (t_prev - t_curr) * pred
+            pred, _ = self.model._decode(x, xs_mask, mean, t_vec)
+            x = x + (t_curr - t_prev) * pred
 
-        return latents, xs_mask
+        return x, xs_mask
 
 
 def main(_):

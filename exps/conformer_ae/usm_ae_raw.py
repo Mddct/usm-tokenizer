@@ -29,22 +29,8 @@ def add_noise(
 ) -> torch.Tensor:
 
     t = timesteps[:, None, None]
-    noisy_samples = t * noise + (1 - t) * original_samples
+    noisy_samples = (1 - t) * noise + t * original_samples
     return noisy_samples
-
-
-class TimestepEmbedding(torch.nn.Module):
-
-    def __init__(self, in_size, embedding_dim):
-        super().__init__()
-        self.linear1 = torch.nn.Linear(in_size, embedding_dim)
-        self.linear2 = torch.nn.Linear(embedding_dim, embedding_dim)
-
-    def forward(self, x):
-        x = self.linear1(x)
-        x = torch.nn.functional.gelu(x)
-        x = self.linear2(x)
-        return x
 
 
 class SimpleDIT(torch.nn.Module):
@@ -54,14 +40,14 @@ class SimpleDIT(torch.nn.Module):
         self.configs = configs
 
         self.decoder = Conformer(configs)
-        self.t_embedding = TimestepEmbedding(configs.timesteps_dim,
-                                             configs.in_dims)
-        self.condition_embedding = TimestepEmbedding(configs.latent_dim,
-                                                     configs.in_dims)
-
-        self.proj = torch.nn.Linear(configs.in_dims,
-                                    configs.output_size,
-                                    bias=False)
+        # TODO: layer by layer time constraint
+        self.t_embedding = torch.nn.Sequential(
+            torch.nn.Linear(configs.timesteps_dim, configs.timesteps_dim * 2),
+            torch.nn.GELU(),
+            torch.nn.Linear(configs.timesteps_dim * 2, configs.output_size),
+        )
+        self.proj = torch.nn.Linear(configs.in_dims + configs.output_size,
+                                    configs.output_size)
 
     def timestep_embedding(self,
                            t: torch.Tensor,
@@ -116,9 +102,12 @@ class SimpleDIT(torch.nn.Module):
         timesteps = self.timestep_embedding(
             timesteps, self.configs.timesteps_dim)  # [B, D]
         t_emb = self.t_embedding(timesteps)
-        c_emb = self.condition_embedding(condition)
-        hidden_states = t_emb.unsqueeze(1) + xs + c_emb
-        hidden_states = self.proj(hidden_states)
+        c_emb = condition
+
+        # TODO: cfg
+        xs = torch.cat((xs, c_emb), dim=-1)
+        hidden_states = self.proj(xs)
+        hidden_states = t_emb.unsqueeze(1) + hidden_states
         v_pred, mask = self.decoder(hidden_states, xs_mask)
         return v_pred, mask.squeeze(1)
 
@@ -132,16 +121,18 @@ class AudioAutoEncoder(torch.nn.Module):
         self.configs = configs
 
         self.encoder = Conformer(configs)
+        self.z_proj = torch.nn.Linear(configs.output_size,
+                                      configs.output_size * 2,
+                                      bias=False)
+        with torch.no_grad():
+            for param in self.encoder.parameters():
+                param *= 0.5
 
         self.decoder = SimpleDIT(configs)
         self.enc_proj_in = torch.nn.Sequential(
             torch.nn.Linear(configs.in_dims, 768, bias=False),
-            torch.nn.Linear(768, configs.output_size, bias=False),
+            torch.nn.Linear(768, configs.output_size),
         )
-        self.z_proj = torch.nn.Sequential(
-            torch.nn.Linear(configs.output_size, 768, bias=False),
-            torch.nn.Linear(768, configs.latent_dim * 2, bias=False))
-
         self.dec_proj_out = torch.nn.Linear(configs.output_size,
                                             configs.in_dims)
 
@@ -155,7 +146,7 @@ class AudioAutoEncoder(torch.nn.Module):
 
         encoder_out, _ = self.encoder(xs, xs_mask)
         z = self.z_proj(encoder_out)
-        return z, xs_mask.squeeze(1)
+        return z, xs_mask
 
     def _decode(self, z: torch.Tensor, z_mask: torch.Tensor,
                 condition: torch.Tensor, t: torch.Tensor):
@@ -176,19 +167,19 @@ class AudioAutoEncoder(torch.nn.Module):
                             dtype=audio.dtype,
                             device=audio.device)
         noise_audio = add_noise(audio, noise, t)
-        recog, _ = self._decode(noise_audio, xs_mask.squeeze(1), condition, t)
+        recog, _ = self._decode(noise_audio, xs_mask, condition, t)
 
-        target = noise - audio
+        target = audio - noise
         loss_flow = (target - recog)**2 * xs_mask.unsqueeze(-1)
         loss_kl = kl_divergence(mean, log_var) * xs_mask.unsqueeze(-1)
 
-        loss_flow = loss_flow.sum() / xs_mask.sum() / self.configs.in_dims
-        loss_kl = loss_kl.sum() / xs_mask.sum() / self.configs.latent_dim
+        loss_flow = loss_flow.sum() / (xs_mask.sum() * self.configs.in_dims)
+        loss_kl = loss_kl.sum() / xs_mask.sum()
         loss = self.configs.loss_kl_weight * loss_kl.sum() + loss_flow
         return {
             "loss": loss,
-            "loss_kl": loss_kl.sum().detach(),
-            "loss_flow": loss_flow.sum().detach(),
+            "loss_kl": loss_kl.detach(),
+            "loss_flow": loss_flow.detach(),
         }
 
 
