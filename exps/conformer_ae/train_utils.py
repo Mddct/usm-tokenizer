@@ -108,12 +108,6 @@ class TrainState:
             seed=config.seed)
 
         self.step = 0
-        self.timesteps = torch.linspace(
-            1,
-            0,
-            steps=config.flow_infer_steps + 1,
-        ).cuda()
-
         self.writer = SummaryWriter(config.tensorboard_dir)
         # Optimizers
         self.opt = optim.AdamW(
@@ -127,15 +121,10 @@ class TrainState:
         wav, wav_lens = batch['audio'].to(device), batch['audio_lens'].to(
             device)
 
-        timesteps = torch.randint(
-            low=0,
-            high=len(self.timesteps) - 1,
-            size=(wav.shape[0], ),
-            device=wav.device,
-        )
         log_str = f'[RANK {self.rank}] step_{self.step+1}: '
 
-        loss_dict = self.model(wav, wav_lens, self.timesteps[timesteps])
+        loss_dict = self.model(wav, wav_lens,
+                               torch.rand(wav.shape[0], device=wav.device))
         loss = loss_dict['loss']
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(),
