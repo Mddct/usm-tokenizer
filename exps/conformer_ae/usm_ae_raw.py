@@ -148,11 +148,11 @@ class AudioAutoEncoder(torch.nn.Module):
         z = self.z_proj(encoder_out)
         return z, xs_mask
 
-    def _decode(self, z: torch.Tensor, z_mask: torch.Tensor,
+    def _decode(self, inputs: torch.Tensor, inputs_mask: torch.Tensor,
                 condition: torch.Tensor, t: torch.Tensor):
-        xs, _ = self.decoder(z, z_mask, condition, t)
+        xs, _ = self.decoder(inputs, inputs_mask, condition, t)
         xs = self.dec_proj_out(xs)
-        return xs, z_mask
+        return xs, inputs_mask
 
     def forward(self, audio: torch.Tensor, audio_lens: torch.Tensor,
                 t: torch.Tensor):
@@ -165,7 +165,7 @@ class AudioAutoEncoder(torch.nn.Module):
 
         noise = torch.randn(audio.shape,
                             dtype=audio.dtype,
-                            device=audio.device)
+                            device=audio.device) * self.configs.noise_scale
         noise_audio = add_noise(audio, noise, t)
         recog, _ = self._decode(noise_audio, xs_mask, condition, t)
 

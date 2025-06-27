@@ -105,6 +105,7 @@ def get_config():
 
     config.in_dims = 320  # 50hz, 16K: 320; 24k 480, 48k 960
     config.flow_infer_steps = 50
+    config.noise_scale = 0.25
     config.loss_kl_weight = 0.000001
     config.timesteps_dim = 128
 
