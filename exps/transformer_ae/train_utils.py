@@ -7,7 +7,7 @@ import torch.distributed as dist
 import torch.optim as optim
 from absl import logging
 from exps.transformer_ae.dataset import init_dataset_and_dataloader
-from exps.transformer_ae.model import AudioAutoEncoder
+from exps.transformer_ae.model import AudioAutoEncoder, kl_divergence
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.tensorboard import SummaryWriter
 from vocos.experimental.loss import (MultiScaleSFTLoss,
@@ -15,6 +15,42 @@ from vocos.experimental.loss import (MultiScaleSFTLoss,
                                      compute_feature_matching_loss,
                                      compute_generator_loss)
 from vocos.experimental.stft_discriminator import MultiScaleSTFTDiscriminator
+from wenet.utils.mask import make_non_pad_mask
+
+
+class TrainModel(torch.nn.Module):
+
+    def __init__(self, model: AudioAutoEncoder, config) -> None:
+        super().__init__()
+        self.config = config
+        self.model = model
+
+    def forward(self, audio: torch.Tensor, audio_lens: torch.Tensor):
+        """
+        Args:
+            audio: shape [B,C,T]
+            audio_lens: shape [B,T]
+        Returns:
+            audio_gen: shape [B,C,T]
+            audio_mask: shape [B,T]
+            autioencoder mean: shape [B,T//self.config_in_dims, self.config.latent_dim]
+            autioencoder logvar: shape [B,T//self.config_in_dims, self.config.latent_dim]
+        """
+        # NOTE: audio is already padded
+        assert audio.ndim == 3 and audio.shape[1] == 1
+
+        B, C, T = audio.shape
+        # TODO: conv for multiple channel in future
+        audio = audio.reshape(B, C, T // self.config.in_dims, -1).squeeze(1)
+        audio_lens = audio_lens // self.config.in_dims
+
+        out, out_mask, loss_kl = self.model(audio, audio_lens)
+
+        # out : [B,T,D] -> [B,1,T*D]
+        out = out.reshape(B, 1, T * self.config.in_dims)
+        out_mask = out_mask[:, :, None].repeat(1, 1, self.config.in_dims)
+        out_mask = out_mask.reshape(B, T * self.config.in_dims)
+        return out, out_mask, loss_kl
 
 
 class WarmupLR(_LRScheduler):
@@ -93,8 +129,7 @@ class TrainState:
     ):
 
         _, _, self.rank = init_distributed(config)
-        model = AudioAutoEncoder(config)
-        model.cuda()
+        model = TrainModel(AudioAutoEncoder(config), config).cuda()
         self.config = config
         # TODO: FSDP or deepspeed for future usm ae or dit (flow) decoder
         self.model = torch.nn.parallel.DistributedDataParallel(
@@ -155,7 +190,7 @@ class TrainState:
         wav, wav_lens = batch['wavs'].to(device), batch['wavs_lens'].to(device)
         log_str = f'[RANK {self.rank}] step_{self.step+1}: '
 
-        wav_g, wavg_mask = self.model(wav, wav_lens)
+        wav_g, wavg_mask, loss_kl = self.model(wav, wav_lens)
         wav = wav[:, :wav_g.shape[1]]
         wav = wav * wavg_mask
         if self.config.disc_train_start < self.step + 1:
@@ -181,9 +216,8 @@ class TrainState:
                                        grad_norm_mrd, self.step)
 
             log_str += f'loss_mpd: {loss_mrd:>6.3f}'
-
         spec_loss = self.spec_loss(wav_g, wav, wavg_mask)
-        gen_loss = spec_loss * self.config.spec_loss_coeff
+        gen_loss = spec_loss * self.config.spec_loss_coeff + self.config.kl_weight * loss_kl
 
         if self.config.disc_train_start < self.step + 1:
             with torch.no_grad():
@@ -211,9 +245,9 @@ class TrainState:
                                        loss_gen_mrd, self.step)
                 self.writer.add_scalar("generator/feature_matching_mrd",
                                        loss_fm_mrd, self.step)
-                self.writer.add_scalar("generator/total_loss", gen_loss,
-                                       self.step)
+            self.writer.add_scalar("generator/total_loss", gen_loss, self.step)
             self.writer.add_scalar("generator/spec_loss", spec_loss, self.step)
+            self.writer.add_scalar("generator/kl_loss", loss_kl, self.step)
             self.writer.add_scalar("generator/grad_norm", grad_norm_g,
                                    self.step)
 

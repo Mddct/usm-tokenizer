@@ -70,7 +70,14 @@ class AudioAutoEncoder(torch.nn.Module):
         xs, xs_mask = self._encode(audio, audio_lens)
         mean, log_var = xs.chunk(2, dim=-1)
         z = reparameterize(mean, log_var)
-
-        out, _ = self._decode(x, xs_mask)
+        z_mask = xs_mask
+        out, _ = self._decode(z, z_mask)
         out_mask = xs_mask
-        return out, out_mask
+
+        loss_kl = kl_divergence(mean, log_var) * xs_mask.unsqueeze(-1)
+        loss_kl = loss_kl.sum() / xs_mask.sum()
+        return out, out_mask, loss_kl
+
+
+def kl_divergence(mean, logvar):
+    return -0.5 * (1 + logvar - torch.square(mean) - torch.exp(logvar))
