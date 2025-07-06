@@ -191,8 +191,8 @@ class TrainState:
         log_str = f'[RANK {self.rank}] step_{self.step+1}: '
 
         wav_g, wavg_mask, loss_kl = self.model(wav, wav_lens)
-        wav = wav[:, :wav_g.shape[1]]
-        wav = wav * wavg_mask
+        wav = wav[:, :, :wav_g.shape[1]]
+        wav = wav * wavg_mask[:, None, :]
         if self.config.disc_train_start < self.step + 1:
             self.opt_disc.zero_grad()
             real_score_mrd, real_score_mp_masks, _, _ = self.mstft_disc(
